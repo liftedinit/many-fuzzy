@@ -5,7 +5,7 @@ use std::ops::Bound;
 peg::parser! {
   pub grammar fuzz_string() for str {
     rule number() -> u64
-        = n:$(['0'..='9']+) {? n.parse().or(Err("u32")) }
+        = n:$(['0'..='9']+) {? n.parse().or(Err("number")) }
     rule _ = quiet!{[' ' | '\n' | '\t']+}
 
     rule range_u64() -> (Bound<u64>, Bound<u64>)

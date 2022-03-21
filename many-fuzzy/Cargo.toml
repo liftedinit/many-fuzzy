@@ -12,7 +12,7 @@ clap = { version = "3.0.0-rc.9", features = [ "derive" ] }
 hdrhistogram = "7.5.0"
 many = { git = "https://github.com/l-1-labs/many-rs.git" }
 many-client = { git = "https://github.com/l-1-labs/many-rs.git" }
-minicose = { git = "ssh://git@github.com/l-1-labs/rust-minicose.git", features = [ "allow-unsigned" ] }
+minicose = { git = "https://git@github.com/l-1-labs/rust-minicose.git", features = [ "allow-unsigned" ] }
 peg = "0.8.0"
 proptest = "1.0.0"
 rand = { version = "0.8.5", features = [ "std_rng" ] }

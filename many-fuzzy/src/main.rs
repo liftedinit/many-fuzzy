@@ -6,9 +6,9 @@ use many::message::{
     RequestMessageBuilder,
 };
 use many::types::identity::CoseKeyIdentity;
-use many::Identity;
 use minicose::CoseSign1;
 use rand::{Rng, SeedableRng};
+use std::num::ParseIntError;
 use tokio::sync::oneshot::Sender;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -19,6 +19,15 @@ mod fuzz;
 mod parsers;
 mod stats;
 
+fn validate_nb_threads(v: &str) -> Result<(), String> {
+    let threads: usize = v.parse().map_err(|e: ParseIntError| e.to_string())?;
+    if threads == 0 {
+        return Err("Number of threads must be greater than 0.".to_string());
+    }
+
+    Ok(())
+}
+
 #[derive(Parser)]
 struct Opts {
     /// Increase output logging verbosity to DEBUG level.
@@ -28,6 +37,10 @@ struct Opts {
     /// Suppress all output logging. Can be used multiple times to suppress more.
     #[clap(short, long, parse(from_occurrences))]
     quiet: i8,
+
+    /// Number of threads to use. By default, 10.
+    #[clap(short, long, default_value = "10", validator = validate_nb_threads)]
+    threads: usize,
 
     #[clap(subcommand)]
     subcommand: SubCommand,
@@ -55,11 +68,7 @@ struct FuzzOpt {
     /// The special string "anonymous" will be used to add anonymous
     /// to the list of pem files.
     #[clap(long)]
-    pem: Option<String>,
-
-    /// The identity to send it to.
-    #[clap(long)]
-    to: Option<Identity>,
+    pem: Option<Vec<String>>,
 
     /// The server to connect to.
     server: url::Url,
@@ -72,9 +81,10 @@ struct FuzzOpt {
     data: String,
 }
 
-fn split_pem_args(pem_list: String) -> Result<Vec<CoseKeyIdentity>, String> {
-    pem_list
-        .split(",")
+fn split_pem_args(pem_list: Vec<String>) -> Result<impl Iterator<Item = CoseKeyIdentity>, String> {
+    Ok(pem_list
+        .iter()
+        .flat_map(|str| str.split(','))
         .map(|str| {
             if str == "anonymous" {
                 Ok(CoseKeyIdentity::anonymous())
@@ -84,7 +94,9 @@ fn split_pem_args(pem_list: String) -> Result<Vec<CoseKeyIdentity>, String> {
                 )
             }
         })
-        .collect()
+        .collect::<Result<Vec<CoseKeyIdentity>, _>>()?
+        .into_iter()
+        .cycle())
 }
 
 fn create_messages(
@@ -102,9 +114,7 @@ fn create_messages(
             let ty = cap.get(1).unwrap();
             let mut generator = parsers::fuzz_string::generator(ty.as_str())
                 .expect("Could not parse fuzzy parameters");
-            let value = generator.fuzz(rng);
-
-            value
+            generator.fuzz(rng)
         });
         builder.data(cbor_diag::parse_diag(&data).unwrap().to_bytes());
         messages.push(builder.build().map_err(|e| e.to_string())?);
@@ -113,7 +123,10 @@ fn create_messages(
     Ok(messages)
 }
 
-/// Start a thread that waits every 2 seconds and show the current progress.
+/// Start a thread that waits every seconds there is progress, or every 5 seconds if no
+/// progress is made, and show the current progress (number of requests sent and number
+/// of responses returned).
+/// TODO: maybe this could be a progress bar.
 fn start_counting_thread(statistics: Statistics) -> (Sender<()>, JoinHandle<()>) {
     let (stop_thread_tx, mut stop_thread_rx) = tokio::sync::oneshot::channel();
     let thread_handle = tokio::spawn(async move {
@@ -275,11 +288,11 @@ async fn send_and_record(
     })
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
-async fn main() {
+fn main() {
     let Opts {
         verbose,
         quiet,
+        threads,
         subcommand,
     } = Opts::parse();
     let verbose_level = 2 + verbose - quiet;
@@ -294,10 +307,28 @@ async fn main() {
     };
     tracing_subscriber::fmt().with_max_level(log_level).init();
 
+    let result = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(threads)
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async { execute(subcommand).await });
+
+    match result {
+        Ok(_) => {}
+        Err(message) => {
+            eprintln!("{}", message);
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn execute(subcommand: SubCommand) -> Result<(), String> {
     match subcommand {
         SubCommand::Fuzz(o) => {
             // Get all PEM files.
-            let id_list = split_pem_args(o.pem.unwrap_or_else(|| "anonymous".to_string())).unwrap();
+            let id_list =
+                split_pem_args(o.pem.unwrap_or_else(|| vec!["anonymous".to_string()])).unwrap();
 
             let mut builder = RequestMessageBuilder::default();
             builder.method(o.endpoint);
@@ -309,7 +340,7 @@ async fn main() {
             let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
             let messages = create_messages(&mut rng, o.number, builder, &o.data).unwrap();
 
-            let msg_it = messages.into_iter().zip(id_list.iter().cloned().cycle());
+            let msg_it = messages.into_iter().zip(id_list);
 
             let mut handles = Vec::with_capacity(1024);
 
@@ -321,7 +352,7 @@ async fn main() {
                 msg.from = if signer.identity.is_anonymous() {
                     None
                 } else {
-                    Some(signer.identity.clone())
+                    Some(signer.identity)
                 };
 
                 let statistics = statistics.clone();
@@ -345,4 +376,5 @@ async fn main() {
             show_statistics(statistics).await;
         }
     }
+    Ok(())
 }
