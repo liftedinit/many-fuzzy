@@ -1,19 +1,22 @@
 use crate::stats::Statistics;
 use clap::Parser;
+use coset::{CoseSign1, TaggedCborSerializable};
 use fuzz::FuzzGenerator;
 use many::message::{
     decode_response_from_cose_sign1, encode_cose_sign1_from_request, RequestMessage,
     RequestMessageBuilder,
 };
 use many::types::identity::CoseKeyIdentity;
-use minicose::CoseSign1;
 use rand::{Rng, SeedableRng};
 use std::num::ParseIntError;
 use tokio::sync::oneshot::Sender;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio::time::{interval, Duration};
+use tokio_retry::strategy::{jitter, ExponentialBackoff};
+use tokio_retry::Retry;
 use tracing::level_filters::LevelFilter;
+use tracing::{error, trace};
 
 mod fuzz;
 mod parsers;
@@ -41,6 +44,10 @@ struct Opts {
     /// Number of threads to use. By default, 10.
     #[clap(short, long, default_value = "10", validator = validate_nb_threads)]
     threads: usize,
+
+    /// Whether to include a nonce in the message. Default to false.
+    #[clap(long)]
+    nonce: bool,
 
     #[clap(subcommand)]
     subcommand: SubCommand,
@@ -79,6 +86,10 @@ struct FuzzOpt {
     /// The content of the message itself (its payload).
     /// Will replace any substring `%()` with fuzzed values.
     data: String,
+
+    /// Whether to wait for async tokens to include resolution statistics.
+    #[clap(long)]
+    r#async: bool,
 }
 
 fn split_pem_args(pem_list: Vec<String>) -> Result<impl Iterator<Item = CoseKeyIdentity>, String> {
@@ -239,48 +250,65 @@ async fn show_statistics(statistics: Statistics) {
 
 // Send the request and record the result.
 async fn send_and_record(
-    url: url::Url,
+    req: reqwest::RequestBuilder,
     msg: RequestMessage,
     signer: CoseKeyIdentity,
     statistics: Statistics,
 ) -> JoinHandle<()> {
-    let client = reqwest::ClientBuilder::new().build().unwrap();
-
     tokio::spawn(async move {
         let cose_sign1 = encode_cose_sign1_from_request(msg, &signer).unwrap();
-        let body = cose_sign1.to_bytes().unwrap();
-        let post = client.post(url).body(body);
+        let body = cose_sign1.to_tagged_vec().unwrap();
+        let post = req.body(body);
         statistics.request_counter.inc();
 
         // Do not include the signature generation and analyzing the response
         // in the measurement.
-        let start = Instant::now();
-        let response = post.send().await;
-        let elapsed = start.elapsed();
+        let strategy = ExponentialBackoff::from_millis(10).map(jitter).take(5);
+        let response = Retry::spawn(strategy, || async {
+            let post = post.try_clone().unwrap();
 
-        statistics
-            .histogram()
-            .await
-            .record(elapsed.as_nanos() as u64)
-            .unwrap();
+            let start = Instant::now();
+            let response = post.send().await;
+            let elapsed = start.elapsed();
+            response.map(|r| (r, elapsed))
+        })
+        .await;
 
         match response {
-            Err(_) => statistics.http_errors_counter.inc(),
-            Ok(resp) => {
-                let body = resp.bytes().await.map_err(|_| ()).and_then(|bytes| {
-                    decode_response_from_cose_sign1(
-                        CoseSign1::from_bytes(bytes.as_ref()).map_err(|_| ())?,
-                        None,
-                    )
-                    .map_err(|_| ())
-                });
+            Err(x) => {
+                error!("transport error: {}", x.to_string().as_str());
+                statistics.http_errors_counter.inc()
+            }
+            Ok((resp, elapsed)) => {
+                statistics
+                    .histogram()
+                    .await
+                    .record(elapsed.as_nanos() as u64)
+                    .unwrap();
+
+                let body = resp
+                    .bytes()
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|bytes| {
+                        trace!("received: {}", hex::encode(bytes.as_ref()));
+                        decode_response_from_cose_sign1(
+                            CoseSign1::from_tagged_slice(bytes.as_ref())
+                                .map_err(|e| e.to_string())?,
+                            None,
+                        )
+                    });
 
                 match body {
                     Ok(msg) => match msg.data {
                         Ok(_) => statistics.many_success_counter.inc(),
                         Err(_) => statistics.many_errors_counter.inc(),
                     },
-                    Err(_) => statistics.http_errors_counter.inc(),
+                    Err(e) => {
+                        error!("err: {}", e);
+
+                        statistics.http_errors_counter.inc()
+                    }
                 };
             }
         }
@@ -294,6 +322,7 @@ fn main() {
         quiet,
         threads,
         subcommand,
+        nonce,
     } = Opts::parse();
     let verbose_level = 2 + verbose - quiet;
     let log_level = match verbose_level {
@@ -312,7 +341,7 @@ fn main() {
         .enable_all()
         .build()
         .unwrap()
-        .block_on(async { execute(subcommand).await });
+        .block_on(async { execute(subcommand, nonce).await });
 
     match result {
         Ok(_) => {}
@@ -323,7 +352,7 @@ fn main() {
     }
 }
 
-async fn execute(subcommand: SubCommand) -> Result<(), String> {
+async fn execute(subcommand: SubCommand, should_nonce: bool) -> Result<(), String> {
     match subcommand {
         SubCommand::Fuzz(o) => {
             // Get all PEM files.
@@ -347,6 +376,10 @@ async fn execute(subcommand: SubCommand) -> Result<(), String> {
             let statistics = Statistics::default();
             let (stop_progress_tx, progress_thread_handle) =
                 start_counting_thread(statistics.clone());
+            let mut nonce: u64 = 0;
+
+            let client = reqwest::ClientBuilder::new().build().unwrap();
+            let r = client.post(o.server.clone());
 
             for (mut msg, signer) in msg_it {
                 msg.from = if signer.identity.is_anonymous() {
@@ -355,8 +388,13 @@ async fn execute(subcommand: SubCommand) -> Result<(), String> {
                     Some(signer.identity)
                 };
 
+                if should_nonce {
+                    msg.nonce = Some(nonce.to_be_bytes().to_vec());
+                    nonce += 1;
+                }
+
                 let statistics = statistics.clone();
-                let handle = send_and_record(o.server.clone(), msg, signer, statistics).await;
+                let handle = send_and_record(r.try_clone().unwrap(), msg, signer, statistics).await;
                 handles.push(handle);
             }
 
