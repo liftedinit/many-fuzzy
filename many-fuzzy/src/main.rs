@@ -270,7 +270,7 @@ async fn send_and_record(
             let start = Instant::now();
             let response = post.send().await;
             let elapsed = start.elapsed();
-            response.and_then(|r| Ok((r, elapsed)))
+            response.map(|r| (r, elapsed))
         })
         .await;
 
@@ -297,7 +297,6 @@ async fn send_and_record(
                                 .map_err(|e| e.to_string())?,
                             None,
                         )
-                        .map_err(|e| e.to_string())
                     });
 
                 match body {
