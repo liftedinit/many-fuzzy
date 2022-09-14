@@ -2,13 +2,12 @@ use crate::stats::Statistics;
 use clap::Parser;
 use coset::{CoseSign1, TaggedCborSerializable};
 use fuzz::FuzzGenerator;
-use many::message::{
-    decode_response_from_cose_sign1, encode_cose_sign1_from_request, RequestMessage,
-    RequestMessageBuilder,
-};
-use many::types::identity::CoseKeyIdentity;
+use many_identity::{verifiers::AnonymousVerifier, AnonymousIdentity, Identity};
+use many_identity_dsa::{CoseKeyIdentity, CoseKeyVerifier};
+use many_protocol::{decode_response_from_cose_sign1, RequestMessage, RequestMessageBuilder};
 use rand::{Rng, SeedableRng};
 use std::num::ParseIntError;
+use std::sync::Arc;
 use tokio::sync::oneshot::Sender;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -59,7 +58,7 @@ enum SubCommand {
     Fuzz(FuzzOpt),
 }
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 struct FuzzOpt {
     /// Number of messages to create and send.
     #[clap(short)]
@@ -92,20 +91,26 @@ struct FuzzOpt {
     r#async: bool,
 }
 
-fn split_pem_args(pem_list: Vec<String>) -> Result<impl Iterator<Item = CoseKeyIdentity>, String> {
+fn split_pem_args(
+    pem_list: Vec<String>,
+) -> Result<impl Iterator<Item = Arc<dyn Identity>>, String> {
     Ok(pem_list
         .iter()
         .flat_map(|str| str.split(','))
         .map(|str| {
-            if str == "anonymous" {
-                Ok(CoseKeyIdentity::anonymous())
+            let ident: Arc<dyn Identity> = if str == "anonymous" {
+                Arc::new(AnonymousIdentity)
             } else {
-                CoseKeyIdentity::from_pem(
-                    &std::fs::read_to_string(&str).map_err(|e| e.to_string())?,
+                Arc::new(
+                    CoseKeyIdentity::from_pem(
+                        &std::fs::read_to_string(&str).map_err(|e| e.to_string())?,
+                    )
+                    .map_err(|e| e.to_string())?,
                 )
-            }
+            };
+            Ok::<Arc<dyn Identity>, String>(ident)
         })
-        .collect::<Result<Vec<CoseKeyIdentity>, _>>()?
+        .collect::<Result<Vec<Arc<dyn Identity>>, _>>()?
         .into_iter()
         .cycle())
 }
@@ -252,11 +257,14 @@ async fn show_statistics(statistics: Statistics) {
 async fn send_and_record(
     req: reqwest::RequestBuilder,
     msg: RequestMessage,
-    signer: CoseKeyIdentity,
+    signer: Arc<dyn Identity>,
     statistics: Statistics,
 ) -> JoinHandle<()> {
+    let sign1 = coset::CoseSign1Builder::default()
+        .payload(msg.to_bytes().unwrap())
+        .build();
+    let cose_sign1 = signer.sign_1(sign1).unwrap();
     tokio::spawn(async move {
-        let cose_sign1 = encode_cose_sign1_from_request(msg, &signer).unwrap();
         let body = cose_sign1.to_tagged_vec().unwrap();
         let post = req.body(body);
         statistics.request_counter.inc();
@@ -293,10 +301,12 @@ async fn send_and_record(
                     .and_then(|bytes| {
                         trace!("received: {}", hex::encode(bytes.as_ref()));
                         decode_response_from_cose_sign1(
-                            CoseSign1::from_tagged_slice(bytes.as_ref())
+                            &CoseSign1::from_tagged_slice(bytes.as_ref())
                                 .map_err(|e| e.to_string())?,
                             None,
+                            &(AnonymousVerifier, CoseKeyVerifier),
                         )
+                        .map_err(|e| e.to_string())
                     });
 
                 match body {
@@ -355,6 +365,8 @@ fn main() {
 async fn execute(subcommand: SubCommand, should_nonce: bool) -> Result<(), String> {
     match subcommand {
         SubCommand::Fuzz(o) => {
+            tracing::debug!("{:?}", o);
+
             // Get all PEM files.
             let id_list =
                 split_pem_args(o.pem.unwrap_or_else(|| vec!["anonymous".to_string()])).unwrap();
@@ -382,10 +394,10 @@ async fn execute(subcommand: SubCommand, should_nonce: bool) -> Result<(), Strin
             let r = client.post(o.server.clone());
 
             for (mut msg, signer) in msg_it {
-                msg.from = if signer.identity.is_anonymous() {
+                msg.from = if signer.address().is_anonymous() {
                     None
                 } else {
-                    Some(signer.identity)
+                    Some(signer.address())
                 };
 
                 if should_nonce {
