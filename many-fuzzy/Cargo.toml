@@ -7,13 +7,15 @@ edition = "2021"
 
 [dependencies]
 base64 = "0.13.0"
-cbor-diag = "0.1.8"
+cbor-diag = "0.1.10"
 coset = "0.3.2"
 clap = { version = "3.0.0-rc.9", features = [ "derive" ] }
 hdrhistogram = "7.5.0"
 hex = "0.4.3"
-many = { git = "https://github.com/liftedinit/many-rs.git" }
-many-client = { git = "https://github.com/liftedinit/many-rs.git" }
+many-client = { git = "https://github.com/liftedinit/many-rs.git", rev = "d97a2727d498cf1535d73e22aa3c899ac2999f06" }
+many-identity = { git = "https://github.com/liftedinit/many-rs.git", rev = "d97a2727d498cf1535d73e22aa3c899ac2999f06" }
+many-identity-dsa = { git = "https://github.com/liftedinit/many-rs.git", rev = "d97a2727d498cf1535d73e22aa3c899ac2999f06", features = ["ecdsa", "ed25519"] }
+many-protocol = { git = "https://github.com/liftedinit/many-rs.git", rev = "d97a2727d498cf1535d73e22aa3c899ac2999f06" }
 peg = "0.8.0"
 proptest = "1.0.0"
 rand = { version = "0.8.5", features = [ "std_rng" ] }
@@ -21,7 +23,7 @@ rand_distr = "0.4.3"
 regex = "1.5.5"
 reqwest = "0.11.10"
 tracing = "0.1.29"
-tracing-subscriber = "0.2.24"
+tracing-subscriber = "0.3.15"
 tracing-timing = "0.6.0"
 tokio = { version = "1.12.0", features = [ "full" ] }
 tokio-retry = "0.3.0"
