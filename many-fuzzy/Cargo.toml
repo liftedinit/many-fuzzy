@@ -7,16 +7,17 @@ edition = "2021"
 
 [dependencies]
 base64 = "0.13.0"
-cbor-diag = "0.1.10"
+cbor-diag = "0.1.11"
 coset = "0.3.2"
-clap = { version = "3.0.0-rc.9", features = [ "derive" ] }
+clap = { version = "3.2.22", features = [ "derive" ] }
 hdrhistogram = "7.5.0"
 hex = "0.4.3"
-many-client = { git = "https://github.com/liftedinit/many-rs.git", rev = "d97a2727d498cf1535d73e22aa3c899ac2999f06" }
-many-identity = { git = "https://github.com/liftedinit/many-rs.git", rev = "d97a2727d498cf1535d73e22aa3c899ac2999f06" }
-many-identity-dsa = { git = "https://github.com/liftedinit/many-rs.git", rev = "d97a2727d498cf1535d73e22aa3c899ac2999f06", features = ["ecdsa", "ed25519"] }
-many-protocol = { git = "https://github.com/liftedinit/many-rs.git", rev = "d97a2727d498cf1535d73e22aa3c899ac2999f06" }
-peg = "0.8.0"
+many-client = { git = "https://github.com/liftedinit/many-rs.git", rev = "4ac94c58f66c9661b3bfbb50b40bc8d8cfc19699" }
+many-identity = { git = "https://github.com/liftedinit/many-rs.git", rev = "4ac94c58f66c9661b3bfbb50b40bc8d8cfc19699" }
+many-identity-dsa = { git = "https://github.com/liftedinit/many-rs.git", rev = "4ac94c58f66c9661b3bfbb50b40bc8d8cfc19699", features = ["ecdsa", "ed25519"] }
+many-protocol = { git = "https://github.com/liftedinit/many-rs.git", rev = "4ac94c58f66c9661b3bfbb50b40bc8d8cfc19699" }
+peg = "=0.8.0" # peg = "0.8.1" fails to compile Box<impl FuzzGenerator>
+               # https://github.com/kevinmehall/rust-peg/issues/319
 proptest = "1.0.0"
 rand = { version = "0.8.5", features = [ "std_rng" ] }
 rand_distr = "0.4.3"
