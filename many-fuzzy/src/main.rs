@@ -54,8 +54,24 @@ struct Opts {
 
 #[derive(Parser)]
 enum SubCommand {
+    /// Create one message, output the CBOR diag notation of it,
+    /// then exit (does not send to server).
+    Show(ShowOpt),
+
     /// Run the fuzzer against a server.
     Fuzz(FuzzOpt),
+}
+
+#[derive(Parser, Debug)]
+struct ShowOpt {
+    /// A seed to use for the Rng. By default does not seed the Rng and instead
+    /// randomize it on start.
+    #[clap(long)]
+    seed: Option<u64>,
+
+    /// The content of the message itself (its payload).
+    /// Will replace any substring `%()` with fuzzed values.
+    data: String,
 }
 
 #[derive(Parser, Debug)]
@@ -115,23 +131,30 @@ fn split_pem_args(
         .cycle())
 }
 
-fn create_messages(
-    rng: &mut impl rand::Rng,
-    count: u64,
-    builder: RequestMessageBuilder,
-    message: &str,
-) -> Result<Vec<RequestMessage>, String> {
+fn create_message_data(rng: &mut impl Rng, message: &str) -> Result<String, String> {
     let re = regex::Regex::new(r"%%|%\(([^\)]*)\)").unwrap();
-    let mut messages = Vec::new();
 
-    for _ in 0..count {
-        let mut builder = builder.clone();
-        let data = re.replace(message, |cap: &regex::Captures| {
+    Ok(re
+        .replace_all(message, |cap: &regex::Captures| {
             let ty = cap.get(1).unwrap();
             let mut generator = parsers::fuzz_string::generator(ty.as_str())
                 .expect("Could not parse fuzzy parameters");
             generator.fuzz(rng)
-        });
+        })
+        .to_string())
+}
+
+fn create_messages(
+    rng: &mut impl Rng,
+    count: u64,
+    builder: RequestMessageBuilder,
+    message: &str,
+) -> Result<Vec<RequestMessage>, String> {
+    let mut messages = Vec::new();
+
+    for _ in 0..count {
+        let mut builder = builder.clone();
+        let data = create_message_data(rng, message)?;
         builder.data(cbor_diag::parse_diag(&data).unwrap().to_bytes());
         messages.push(builder.build().map_err(|e| e.to_string())?);
     }
@@ -364,6 +387,17 @@ fn main() {
 
 async fn execute(subcommand: SubCommand, should_nonce: bool) -> Result<(), String> {
     match subcommand {
+        SubCommand::Show(o) => {
+            tracing::debug!("{:?}", o);
+
+            // We select a seed to be able to output it to the user and allow for replays.
+            let seed = o.seed.unwrap_or_else(|| rand::thread_rng().gen::<u64>());
+            tracing::info!(seed);
+
+            let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+
+            println!("{}", create_message_data(&mut rng, &o.data).unwrap());
+        }
         SubCommand::Fuzz(o) => {
             tracing::debug!("{:?}", o);
 
