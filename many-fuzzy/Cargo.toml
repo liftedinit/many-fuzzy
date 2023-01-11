@@ -6,16 +6,16 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-base64 = "0.13.0"
+base64 = "0.21.0"
 cbor-diag = "0.1.11"
 coset = "0.3.2"
 clap = { version = "3.2.22", features = [ "derive" ] }
 hdrhistogram = "7.5.0"
 hex = "0.4.3"
-many-client = { git = "https://github.com/liftedinit/many-rs.git", rev = "4ac94c58f66c9661b3bfbb50b40bc8d8cfc19699" }
-many-identity = { git = "https://github.com/liftedinit/many-rs.git", rev = "4ac94c58f66c9661b3bfbb50b40bc8d8cfc19699" }
-many-identity-dsa = { git = "https://github.com/liftedinit/many-rs.git", rev = "4ac94c58f66c9661b3bfbb50b40bc8d8cfc19699", features = ["ecdsa", "ed25519"] }
-many-protocol = { git = "https://github.com/liftedinit/many-rs.git", rev = "4ac94c58f66c9661b3bfbb50b40bc8d8cfc19699" }
+many-client = { git = "https://github.com/liftedinit/many-rs.git", rev = "591e5b40de75828ea1984780321060cf3da21635" }
+many-identity = { git = "https://github.com/liftedinit/many-rs.git", rev = "591e5b40de75828ea1984780321060cf3da21635" }
+many-identity-dsa = { git = "https://github.com/liftedinit/many-rs.git", rev = "591e5b40de75828ea1984780321060cf3da21635", features = ["ecdsa", "ed25519"] }
+many-protocol = { git = "https://github.com/liftedinit/many-rs.git", rev = "591e5b40de75828ea1984780321060cf3da21635" }
 num-traits = "0.2.15"
 peg = "0.8.1"
 proptest = "1.0.0"
@@ -26,6 +26,6 @@ reqwest = "0.11.10"
 tracing = "0.1.29"
 tracing-subscriber = "0.3.15"
 tracing-timing = "0.6.0"
-tokio = { version = "1.12.0", features = [ "full" ] }
+tokio = { version = "1.24.1", features = [ "full" ] }
 tokio-retry = "0.3.0"
 url = "2.2.2"
